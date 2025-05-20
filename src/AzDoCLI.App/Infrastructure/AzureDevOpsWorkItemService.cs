@@ -17,7 +17,7 @@ public class AzureDevOpsWorkItemService : IWorkItemService
         _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", authToken);
     }
 
-    public async Task<IEnumerable<WorkItemTreeNode>> ListWorkItemTreeAsync()
+    public async Task<IEnumerable<WorkItemTreeNode>> ListCompletedWorkItemTreeAsync(string wiqlPeriod = "@StartOfDay")
     {
         var wiql = new
         {
@@ -27,12 +27,41 @@ public class AzureDevOpsWorkItemService : IWorkItemService
                     (
                         [Target].[System.AssignedTo] = '{_config.UserEmail}'
                         AND [Target].[System.State] = 'Done'
-                        AND [Target].[Closed Date] >= @StartOfDay
+                        AND [Target].[Closed Date] >= {wiqlPeriod}
                         AND [Target].[System.WorkItemType] = 'Task'
                     )
                     AND [System.Links.LinkType] = 'System.LinkTypes.Hierarchy-Forward'
                     AND [Source].[System.WorkItemType] <> ''"
         };
+        return await QueryWorkItemTreeAsync(wiql);
+    }
+
+    public async Task<IEnumerable<WorkItemTreeNode>> ListActiveWorkItemTreeAsync(string wiqlPeriod = "@StartOfDay")
+    {
+        var wiql = new
+        {
+            query = $@"SELECT [System.Id]
+                  FROM WorkItemLinks
+                  WHERE
+                    (
+                        [Target].[System.AssignedTo] = '{_config.UserEmail}'
+                        AND [Target].[System.State] <> 'Done'
+                        AND [Target].[System.WorkItemType] = 'Task'
+                    )
+                    AND [System.Links.LinkType] = 'System.LinkTypes.Hierarchy-Forward'
+                    AND [Source].[System.WorkItemType] <> ''"
+        };
+        return await QueryWorkItemTreeAsync(wiql);
+    }
+
+    public Task<WorkItem> CreateWorkItemAsync(string title, string type, string assignedTo)
+        => throw new NotImplementedException();
+
+    public Task<WorkItem> UpdateWorkItemAsync(int id, string? title = null, string? state = null, string? assignedTo = null)
+        => throw new NotImplementedException();
+
+    private async Task<IEnumerable<WorkItemTreeNode>> QueryWorkItemTreeAsync(object wiql)
+    {
         var wiqlJson = JsonSerializer.Serialize(wiql);
         var url = $"https://dev.azure.com/{_config.Organization}/{_config.Project}/_apis/wit/wiql?api-version=7.0";
         var response = await _httpClient.PostAsync(url, new StringContent(wiqlJson, System.Text.Encoding.UTF8, "application/json"));
@@ -82,12 +111,10 @@ public class AzureDevOpsWorkItemService : IWorkItemService
             };
             workItemsDict[wi.Id] = wi;
         }
-        // If there are no parent-child links, treat all items as roots (flat tree)
         if (linkIds.Count == 0)
         {
             return workItemsDict.Values.Select(wi => new WorkItemTreeNode { Item = wi }).ToList();
         }
-        // Build children lookup
         var childrenLookup = new Dictionary<int, List<int>>();
         foreach (var id in workItemsDict.Keys)
             childrenLookup[id] = new List<int>();
@@ -96,13 +123,10 @@ public class AzureDevOpsWorkItemService : IWorkItemService
             if (parent.HasValue && child.HasValue && childrenLookup.ContainsKey(parent.Value))
                 childrenLookup[parent.Value].Add(child.Value);
         }
-        // Find root nodes (those that are not children)
         var allChildren = new HashSet<int>(linkIds.Where(l => l.SourceId.HasValue).Select(l => l.TargetId.Value));
         var roots = workItemsDict.Keys.Where(id => !allChildren.Contains(id)).ToList();
-        // If no roots found, treat all as roots (defensive for orphaned nodes)
         if (roots.Count == 0)
             roots = workItemsDict.Keys.ToList();
-        // Build tree
         var result = new List<WorkItemTreeNode>();
         foreach (var rootId in roots)
         {
@@ -120,8 +144,4 @@ public class AzureDevOpsWorkItemService : IWorkItemService
         }
         return node;
     }
-    public Task<WorkItem> CreateWorkItemAsync(string title, string type, string assignedTo)
-        => throw new NotImplementedException();
-    public Task<WorkItem> UpdateWorkItemAsync(int id, string? title = null, string? state = null, string? assignedTo = null)
-        => throw new NotImplementedException();
 }

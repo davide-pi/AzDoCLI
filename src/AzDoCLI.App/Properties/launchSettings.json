@@ -1,20 +1,17 @@
 {
-  "profiles": {
-    "AzDoCLI": {
-      "commandName": "Project"
-    },
-    "Container (Dockerfile)": {
-      "commandName": "Docker"
-    },
-    "AzDoCLI.App list-completed": {
-      "commandName": "Project",
-      "commandLineArgs": "list-completed",
-      "workingDirectory": "$(ProjectDir)"
-    },
-    "AzDoCLI.App help": {
-      "commandName": "Project",
-      "commandLineArgs": "help",
-      "workingDirectory": "$(ProjectDir)"
+    "profiles": {
+        "AzDoCLI.App help": {
+            "commandName": "Project",
+            "commandLineArgs": "help",
+            "workingDirectory": "$(ProjectDir)"
+        },
+        "AzDoCLI.App list-completed": {
+            "commandName": "Project",
+            "commandLineArgs": "list-completed",
+            "workingDirectory": "$(ProjectDir)"
+        },
+        "Container (Dockerfile)": {
+            "commandName": "Docker"
+        }
     }
-  }
 }
