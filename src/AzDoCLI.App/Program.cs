@@ -34,258 +34,116 @@ internal class Program
         );
         periodOption.AddAlias("-p");
 
-        AddListCompletedCommand(rootCommand, workItemService, host, periodOption);
-        AddListActiveCommand(rootCommand, workItemService, host);
-        AddListAllCommand(rootCommand, workItemService, host, periodOption);
+        var validTypes = new[] { "completed", "active", "all" };
+        var listTypeArgument = new Argument<string>(
+            name: "type",
+            description: "Type of work items to list: completed, active, or all (default: all)",
+            getDefaultValue: () => "all"
+        );
+        var listCommand = new Command("list", "List work items: completed, active, or all")
+        {
+            listTypeArgument,
+            periodOption
+        };
+        listCommand.SetHandler(async (string type, string period) =>
+        {
+            if (!string.IsNullOrWhiteSpace(type) && !validTypes.Contains(type.ToLower()))
+            {
+                AnsiConsole.MarkupLine($"[red]Invalid type: '{type}'. Valid values are: completed, active, all.[/]");
+                return;
+            }
+            string wiqlPeriod = period.ToLower() switch
+            {
+                "day" => "@StartOfDay",
+                "week" => "@StartOfWeek",
+                "month" => "@StartOfMonth",
+                _ => "@StartOfDay"
+            };
+            var config = host.Services.GetRequiredService<AzDoConfig>();
+            var typeColors = new Dictionary<string, Color>
+            {
+                { "Task", Color.Yellow },
+                { "Feature", Color.Purple },
+                { "Epic", Color.Orange3 },
+                { "Bug", Color.Red },
+                { "Tech", Color.Grey },
+                { "Impediment", Color.Pink1 }
+            };
+            var stateColors = new Dictionary<string, Color>
+            {
+                { "Done", Color.Green },
+                { "Closed", Color.Green },
+                { "Active", Color.Yellow },
+                { "Committed", Color.Aqua },
+                { "Ready", Color.Orange3 },
+                { "To Do", Color.Grey },
+                { "In Progress", Color.Aqua },
+                { "Removed", Color.Red },
+                { "Implemented", Color.Pink1 }
+            };
+            List<WorkItemTreeNode> roots = new();
+            if (type.Equals("completed", StringComparison.OrdinalIgnoreCase))
+            {
+                roots = (await ((AzureDevOpsWorkItemService)workItemService).ListCompletedWorkItemTreeAsync(wiqlPeriod)).ToList();
+            }
+            else if (type.Equals("active", StringComparison.OrdinalIgnoreCase))
+            {
+                roots = (await ((AzureDevOpsWorkItemService)workItemService).ListActiveWorkItemTreeAsync(wiqlPeriod)).ToList();
+            }
+            else // all or default
+            {
+                var completed = (await ((AzureDevOpsWorkItemService)workItemService).ListCompletedWorkItemTreeAsync(wiqlPeriod)).ToList();
+                var active = (await ((AzureDevOpsWorkItemService)workItemService).ListActiveWorkItemTreeAsync(wiqlPeriod)).ToList();
+                var allRoots = new Dictionary<int, WorkItemTreeNode>();
+                void AddTree(WorkItemTreeNode node)
+                {
+                    if (!allRoots.ContainsKey(node.Item.Id))
+                        allRoots[node.Item.Id] = node;
+                }
+                foreach (var node in completed) AddTree(node);
+                foreach (var node in active) AddTree(node);
+                roots = allRoots.Values.ToList();
+            }
+            if (!roots.Any())
+            {
+                AnsiConsole.MarkupLine("[yellow]No work items found.[/]");
+                return;
+            }
+            double totalCompletedWork = 0;
+            void SumCompletedWork(WorkItemTreeNode node)
+            {
+                if (node.Item.Type == "Task" && node.Item.CompletedWork.HasValue)
+                    totalCompletedWork += node.Item.CompletedWork.Value;
+                foreach (var child in node.Children)
+                    SumCompletedWork(child);
+            }
+            foreach (var root in roots)
+                SumCompletedWork(root);
+            double CalculateAndSetParentCompletedWork(WorkItemTreeNode node)
+            {
+                if (node.Children.Count == 0)
+                    return node.Item.Type == "Task" && node.Item.CompletedWork.HasValue ? node.Item.CompletedWork.Value : 0;
+                double sum = 0;
+                foreach (var child in node.Children)
+                    sum += CalculateAndSetParentCompletedWork(child);
+                node.Item.CompletedWork = sum > 0 ? sum : null;
+                return sum;
+            }
+            foreach (var root in roots)
+                CalculateAndSetParentCompletedWork(root);
+            var tree = new Tree($"[bold]Work Items[/] [grey](Total Completed: {totalCompletedWork})[/]");
+            foreach (var root in roots)
+            {
+                var rootNode = BuildTreeNode(root, typeColors, stateColors, config);
+                tree.AddNode(rootNode);
+            }
+            AnsiConsole.Write(tree);
+        }, listTypeArgument, periodOption);
+        rootCommand.AddCommand(listCommand);
+
         AddHelpCommand(rootCommand);
 
         return await rootCommand.InvokeAsync(args);
-    }
-
-    private static void AddListCompletedCommand(RootCommand rootCommand, IWorkItemService workItemService, IHost host, Option<string> periodOption)
-    {
-        var listCommand = new Command("list-completed", "List completed work items assigned to you for a period (default: today)")
-        {
-            periodOption
-        };
-        listCommand.SetHandler(async (string period) =>
-        {
-            string wiqlPeriod = period.ToLower() switch
-            {
-                "day" => "@StartOfDay",
-                "week" => "@StartOfWeek",
-                "month" => "@StartOfMonth",
-                _ => "@StartOfDay"
-            };
-
-            var roots = (await ((AzureDevOpsWorkItemService)workItemService).ListCompletedWorkItemTreeAsync(wiqlPeriod)).ToList();
-            if (!roots.Any())
-            {
-                AnsiConsole.MarkupLine("[yellow]No work items found.[/]");
-                return;
-            }
-
-            double totalCompletedWork = 0;
-            void SumCompletedWork(WorkItemTreeNode node)
-            {
-                if (node.Item.Type == "Task" && node.Item.CompletedWork.HasValue)
-                    totalCompletedWork += node.Item.CompletedWork.Value;
-                foreach (var child in node.Children)
-                    SumCompletedWork(child);
-            }
-            foreach (var root in roots)
-                SumCompletedWork(root);
-
-            double CalculateAndSetParentCompletedWork(WorkItemTreeNode node)
-            {
-                if (node.Children.Count == 0)
-                    return node.Item.Type == "Task" && node.Item.CompletedWork.HasValue ? node.Item.CompletedWork.Value : 0;
-                double sum = 0;
-                foreach (var child in node.Children)
-                    sum += CalculateAndSetParentCompletedWork(child);
-                node.Item.CompletedWork = sum > 0 ? sum : null;
-                return sum;
-            }
-            foreach (var root in roots)
-                CalculateAndSetParentCompletedWork(root);
-
-            var typeColors = new Dictionary<string, Color>
-            {
-                { "Task", Color.Yellow },
-                { "Feature", Color.Purple },
-                { "Epic", Color.Orange3 },
-                { "Bug", Color.Red },
-                { "Tech", Color.Grey },
-                { "Impediment", Color.Pink1 }
-            };
-            var stateColors = new Dictionary<string, Color>
-            {
-                { "Done", Color.Green },
-                { "Closed", Color.Green },
-                { "Active", Color.Yellow },
-                { "Committed", Color.Aqua },
-                { "Ready", Color.Orange3 },
-                { "To Do", Color.Grey },
-                { "In Progress", Color.Aqua },
-                { "Removed", Color.Red },
-                { "Implemented", Color.Pink1 }
-            };
-
-            var tree = new Tree($"[bold]Work Items[/] [grey](Total Completed: {totalCompletedWork})[/]");
-            foreach (var root in roots)
-            {
-                var rootNode = BuildTreeNode(root, typeColors, stateColors, host.Services.GetRequiredService<AzDoConfig>());
-                tree.AddNode(rootNode);
-            }
-            AnsiConsole.Write(tree);
-        }, periodOption);
-        rootCommand.AddCommand(listCommand);
-    }
-
-    private static void AddListActiveCommand(RootCommand rootCommand, IWorkItemService workItemService, IHost host)
-    {
-        var listActiveCommand = new Command("list-active", "List active work items assigned to you (default: today)");
-        listActiveCommand.SetHandler(async () =>
-        {
-            var roots = (await ((AzureDevOpsWorkItemService)workItemService).ListActiveWorkItemTreeAsync()).ToList();
-            if (!roots.Any())
-            {
-                AnsiConsole.MarkupLine("[yellow]No active work items found.[/]");
-                return;
-            }
-
-            double totalCompletedWork = 0;
-            void SumCompletedWork(WorkItemTreeNode node)
-            {
-                if (node.Item.Type == "Task" && node.Item.CompletedWork.HasValue)
-                    totalCompletedWork += node.Item.CompletedWork.Value;
-                foreach (var child in node.Children)
-                    SumCompletedWork(child);
-            }
-            foreach (var root in roots)
-                SumCompletedWork(root);
-
-            double CalculateAndSetParentCompletedWork(WorkItemTreeNode node)
-            {
-                if (node.Children.Count == 0)
-                    return node.Item.Type == "Task" && node.Item.CompletedWork.HasValue ? node.Item.CompletedWork.Value : 0;
-                double sum = 0;
-                foreach (var child in node.Children)
-                    sum += CalculateAndSetParentCompletedWork(child);
-                node.Item.CompletedWork = sum > 0 ? sum : null;
-                return sum;
-            }
-            foreach (var root in roots)
-                CalculateAndSetParentCompletedWork(root);
-
-            var typeColors = new Dictionary<string, Color>
-            {
-                { "Task", Color.Yellow },
-                { "Feature", Color.Purple },
-                { "Epic", Color.Orange3 },
-                { "Bug", Color.Red },
-                { "Tech", Color.Grey },
-                { "Impediment", Color.Pink1 }
-            };
-            var stateColors = new Dictionary<string, Color>
-            {
-                { "Done", Color.Green },
-                { "Closed", Color.Green },
-                { "Active", Color.Yellow },
-                { "Committed", Color.Aqua },
-                { "Ready", Color.Orange3 },
-                { "To Do", Color.Grey },
-                { "In Progress", Color.Aqua },
-                { "Removed", Color.Red },
-                { "Implemented", Color.Pink1 }
-            };
-
-            var tree = new Tree($"[bold]Work Items[/] [grey](Total Completed: {totalCompletedWork})[/]");
-            foreach (var root in roots)
-            {
-                var rootNode = BuildTreeNode(root, typeColors, stateColors, host.Services.GetRequiredService<AzDoConfig>());
-                tree.AddNode(rootNode);
-            }
-            AnsiConsole.Write(tree);
-        });
-        rootCommand.AddCommand(listActiveCommand);
-    }
-
-    private static void AddListAllCommand(RootCommand rootCommand, IWorkItemService workItemService, IHost host, Option<string> periodOption)
-    {
-        var listAllCommand = new Command("list-all", "List all (completed and active) work items assigned to you for a period (default: today)")
-        {
-            periodOption
-        };
-        listAllCommand.SetHandler(async (string period) =>
-        {
-            string wiqlPeriod = period.ToLower() switch
-            {
-                "day" => "@StartOfDay",
-                "week" => "@StartOfWeek",
-                "month" => "@StartOfMonth",
-                _ => "@StartOfDay"
-            };
-
-            var completed = (await ((AzureDevOpsWorkItemService)workItemService).ListCompletedWorkItemTreeAsync(wiqlPeriod)).ToList();
-            var active = (await ((AzureDevOpsWorkItemService)workItemService).ListActiveWorkItemTreeAsync(wiqlPeriod)).ToList();
-
-            var allRoots = new Dictionary<int, WorkItemTreeNode>();
-            void AddTree(WorkItemTreeNode node)
-            {
-                if (!allRoots.ContainsKey(node.Item.Id))
-                {
-                    allRoots[node.Item.Id] = node;
-                }
-            }
-            foreach (var node in completed)
-                AddTree(node);
-            foreach (var node in active)
-                AddTree(node);
-
-            var mergedRoots = allRoots.Values.ToList();
-
-            if (!mergedRoots.Any())
-            {
-                AnsiConsole.MarkupLine("[yellow]No work items found.[/]");
-                return;
-            }
-
-            double totalCompletedWork = 0;
-            void SumCompletedWork(WorkItemTreeNode node)
-            {
-                if (node.Item.Type == "Task" && node.Item.CompletedWork.HasValue)
-                    totalCompletedWork += node.Item.CompletedWork.Value;
-                foreach (var child in node.Children)
-                    SumCompletedWork(child);
-            }
-            foreach (var root in mergedRoots)
-                SumCompletedWork(root);
-
-            double CalculateAndSetParentCompletedWork(WorkItemTreeNode node)
-            {
-                if (node.Children.Count == 0)
-                    return node.Item.Type == "Task" && node.Item.CompletedWork.HasValue ? node.Item.CompletedWork.Value : 0;
-                double sum = 0;
-                foreach (var child in node.Children)
-                    sum += CalculateAndSetParentCompletedWork(child);
-                node.Item.CompletedWork = sum > 0 ? sum : null;
-                return sum;
-            }
-            foreach (var root in mergedRoots)
-                CalculateAndSetParentCompletedWork(root);
-
-            var typeColors = new Dictionary<string, Color>
-            {
-                { "Task", Color.Yellow },
-                { "Feature", Color.Purple },
-                { "Epic", Color.Orange3 },
-                { "Bug", Color.Red },
-                { "Tech", Color.Grey },
-                { "Impediment", Color.Pink1 }
-            };
-            var stateColors = new Dictionary<string, Color>
-            {
-                { "Done", Color.Green },
-                { "Closed", Color.Green },
-                { "Active", Color.Yellow },
-                { "Committed", Color.Aqua },
-                { "Ready", Color.Orange3 },
-                { "To Do", Color.Grey },
-                { "In Progress", Color.Aqua },
-                { "Removed", Color.Red },
-                { "Implemented", Color.Pink1 }
-            };
-
-            var tree = new Tree($"[bold]Work Items[/] [grey](Total Completed: {totalCompletedWork})[/]");
-            foreach (var root in mergedRoots)
-            {
-                var rootNode = BuildTreeNode(root, typeColors, stateColors, host.Services.GetRequiredService<AzDoConfig>());
-                tree.AddNode(rootNode);
-            }
-            AnsiConsole.Write(tree);
-        }, periodOption);
-        rootCommand.AddCommand(listAllCommand);
     }
 
     private static void AddHelpCommand(RootCommand rootCommand)
@@ -293,13 +151,58 @@ internal class Program
         var helpCommand = new Command("help", "Show help and list available commands");
         helpCommand.SetHandler(() =>
         {
-            AnsiConsole.MarkupLine("[bold yellow]Available Commands:[/]");
             foreach (var cmd in rootCommand.Children.OfType<Command>())
             {
-                AnsiConsole.MarkupLine($"[green]{cmd.Name}[/]: {cmd.Description}");
-                if (cmd.Name == "list-completed" || cmd.Name == "list-all")
+                var content = new Markup($"[italic]{cmd.Description}[/]");
+                if (cmd.Name == "list")
                 {
-                    AnsiConsole.MarkupLine("    [blue]--period[/], [blue]-p[/]: Period to list work items. Possible values: [yellow]day[/] (default), [yellow]week[/], [yellow]month[/]");
+                    // Arguments subpanel
+                    var argsPanel = new Panel(new Rows(
+                            new Markup("[blue]type[/]: Type of work items to list. Possible values: [yellow]completed[/], [yellow]active[/], [yellow]all[/] (default)")
+                        ))
+                        .Header("Arguments", Justify.Left)
+                        .Border(BoxBorder.Rounded)
+                        .BorderColor(Color.Blue)
+                        .Padding(1,0,1,0);
+                    // Options subpanel
+                    var optsPanel = new Panel(new Rows(
+                            new Markup("[green]--period[/], [green]-p[/]: Period to list work items. Possible values: [yellow]day[/] (default), [yellow]week[/], [yellow]month[/]")
+                        ))
+                        .Header("Options", Justify.Left)
+                        .Border(BoxBorder.Rounded)
+                        .BorderColor(Color.Green)
+                        .Padding(1,0,1,0);
+                    // Usage subpanel
+                    var usagePanel = new Panel(new Rows(
+                            new Markup("[grey]dotnet run --project src/AzDoCLI.App list completed --period week[/]"),
+                            new Markup("[grey]dotnet run --project src/AzDoCLI.App list active[/]"),
+                            new Markup("[grey]dotnet run --project src/AzDoCLI.App list all --period month[/]")
+                        ))
+                        .Header("Usage", Justify.Left)
+                        .Border(BoxBorder.Rounded)
+                        .BorderColor(Color.Grey)
+                        .Padding(1,0,1,0);
+
+                    // Nest subpanels inside the main command panel
+                    var mainPanel = new Panel(new Rows(
+                        content,
+                        new Markup(string.Empty),
+                        argsPanel,
+                        optsPanel,
+                        usagePanel
+                    ))
+                    .Header($"[bold yellow]{cmd.Name}[/]", Justify.Left)
+                    .Border(BoxBorder.Double)
+                    .Padding(1,1,1,1);
+                    AnsiConsole.Write(mainPanel);
+                }
+                else
+                {
+                    var panel = new Panel(content)
+                        .Header($"[bold yellow]{cmd.Name}[/]", Justify.Left)
+                        .Border(BoxBorder.Double)
+                        .Padding(1,1,1,1);
+                    AnsiConsole.Write(panel);
                 }
             }
         });

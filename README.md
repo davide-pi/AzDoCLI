@@ -2,9 +2,7 @@
 Azure DevOps Command Line to easily check work items.
 
 ## Features
-- List completed work items assigned to you for a period (day, week, month).
-- List active work items assigned to you (default: today).
-- List all (completed and active) work items assigned to you for a period (day, week, month).
+- List completed, active, or all work items assigned to you for a period (day, week, month) using a single command.
 - Show a list of available commands with descriptions.
 
 ## Usage
@@ -14,33 +12,28 @@ You can run the CLI from the command line or configure your IDE to use the provi
 ### Examples
 
 - List completed work items for today:
-  dotnet run --project src/AzDoCLI.App list-completed
+  dotnet run --project src/AzDoCLI.App list completed
 - List completed work items for a week:
-  dotnet run --project src/AzDoCLI.App list-completed --period week
+  dotnet run --project src/AzDoCLI.App list completed --period week
 - List completed work items for a month:
-  dotnet run --project src/AzDoCLI.App list-completed --period month
+  dotnet run --project src/AzDoCLI.App list completed --period month
 - List active work items for today:
-  dotnet run --project src/AzDoCLI.App list-active
+  dotnet run --project src/AzDoCLI.App list active
 - List all (completed and active) work items for today:
-  dotnet run --project src/AzDoCLI.App list-all
+  dotnet run --project src/AzDoCLI.App list all
 - List all (completed and active) work items for a week:
-  dotnet run --project src/AzDoCLI.App list-all --period week
+  dotnet run --project src/AzDoCLI.App list all --period week
 - Show help and list available commands:
   dotnet run --project src/AzDoCLI.App help
 
 ## Implemented Commands
 
-- `list-completed`  
-  List completed work items assigned to you for a period. Use `--period`/`-p` to specify:
-  - `day`   = today (default)
-  - `week`  = this week
-  - `month` = this month
-
-- `list-active`  
-  List active work items assigned to you (default: today).
-
-- `list-all`  
-  List all (completed and active) work items assigned to you for a period. Use `--period`/`-p` to specify:
+- `list <type>`  
+  List work items assigned to you. `<type>` can be:
+  - `completed`  = completed work items
+  - `active`     = active work items
+  - `all`        = all (completed and active) work items (default)
+  Use `--period`/`-p` to specify:
   - `day`   = today (default)
   - `week`  = this week
   - `month` = this month
